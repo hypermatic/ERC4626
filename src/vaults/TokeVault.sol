@@ -6,6 +6,10 @@ import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
 import "../external/interfaces/tokemak/ILiquidityPool.sol";
 import "../external/interfaces/tokemak/IRewards.sol";
 
+/**
+* A Tokemak compatible ERC4626 vault that takes in a tAsset and auto compounds toke rewards
+* received from staking that tAsset in toke.
+*/
 contract TokeVault is ERC4626 {
     using FixedPointMathLib for uint256;
     using SafeTransferLib for ERC20;
@@ -57,23 +61,6 @@ contract TokeVault is ERC4626 {
         return tAsset.balanceOf(address(this));
     }
 
-    /// @notice Maximum amount of assets that can be withdrawn.
-    /// This is capped by the amount of cash available on hand
-    function maxWithdraw(address owner) public view override returns (uint256) {
-        uint256 assetsBalance = convertToAssets(balanceOf[owner]);
-        uint256 cash = tAsset.balanceOf(address(this));
-        return cash < assetsBalance ? cash : assetsBalance;
-    }
-
-    /// @notice Maximum amount of shares that can be redeemed.
-    /// This is capped by the amount of cash available on hand
-    function maxRedeem(address owner) public view override returns (uint256) {
-        uint256 cash = tAsset.balanceOf(address(this));
-        uint256 cashInShares = convertToShares(cash);
-        uint256 shareBalance = balanceOf[owner];
-        return cashInShares < shareBalance ? cashInShares : shareBalance;
-    }
-
     /**
     * @notice Claims rewards from toke 
     * @dev the payload for claiming (recipient, v, r, s) must be formed off chain
@@ -100,12 +87,17 @@ contract TokeVault is ERC4626 {
         ERC20 underlying = ERC20(tokemakPool.underlyer());
 
         // sell toke rewards earned for underlying asset
-        // todo: toke / underlying oracle needed for safety here OR have a max sale amount with a cooldown period?
+        // todo: dealing with slippage
+        // option 1: - toke / underlying oracle needed for safety
+        // option 2: have a max sale amount with a cooldown period?
+        // option 3: make this a permissioned function and use input to define the MIN price willing to be accepted.
+        // note: slippage here will only ever be upward pressure on the tAsset but you still want to optimise this
 
         // deposit underlying back into toke and take service fee in tAsset
         // uint256 depositAmount = underlyingAmount - (underlyingAmount / 10); // 90%
         // uint256 serviceFee = underlyingAmount / 20; // 5%
         // underlying.safeApprove(address(tokemakPool), depositAmount);
         // tokemakPool.deposit(depositAmount);
+        // underlying.safeTransfer(feeReciever, serviceFee);
     }
 }
