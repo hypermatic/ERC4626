@@ -5,6 +5,8 @@ import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
 import "../external/interfaces/tokemak/ILiquidityPool.sol";
 import "../external/interfaces/tokemak/IRewards.sol";
+import '@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol';
+import '@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol';
 
 /**
 * A Tokemak compatible ERC4626 vault that takes in a tAsset and auto compounds toke rewards
@@ -22,12 +24,17 @@ contract TokeVault is ERC4626 {
     ILiquidityPool public tokemakPool;
     IRewards public rewards;
 
-
     // keeper rewards: default of 1.5 Toke
     uint256 public keeperRewardAmount = 1500000000000000000;
 
     // user requested withdraws
     mapping(address => uint256) public requestedWithdraws;
+
+    // uniswap
+    ISwapRouter public immutable swapRouter;
+    // configurable max swap amount. Default 100 toke (~$2500 USD)
+    uint256 public maxTokeSwapAmount = 100000000000000000000;
+    uint256 public swapPoolFee = 3000; // default 0.3%
 
 
     /**
@@ -36,6 +43,7 @@ contract TokeVault is ERC4626 {
     constructor(
         address _tAsset,
         address _rewards,
+        address _swapRouter,
         string memory name,
         string memory symbol
     ) ERC4626(ERC20(_tAsset), name, symbol) {
@@ -44,6 +52,7 @@ contract TokeVault is ERC4626 {
         // pool representation of toke pool
         tokemakPool = ILiquidityPool(_tAsset);
         rewards = IRewards(_rewards);
+        swapRouter = ISwapRouter(_swapRouter);
     }
 
     function beforeWithdraw(uint256 underlyingAmount, uint256) internal override {
@@ -85,19 +94,40 @@ contract TokeVault is ERC4626 {
     function compound() public {
         // find the asset the tokemak pool is settled in
         ERC20 underlying = ERC20(tokemakPool.underlyer());
+        uint256 tokeBal = toke.balanceOf(address(this));
+        // cap at max toke swap amount
+        uint256 swapAmount = tokeBal >= maxTokeSwapAmount ? maxTokeSwapAmount : tokeBal;
 
         // sell toke rewards earned for underlying asset
-        // todo: dealing with slippage
-        // option 1: - toke / underlying oracle needed for safety
+        // dealing with slippage
+        // todo: option 1: - toke / underlying oracle needed for safety
         // option 2: have a max sale amount with a cooldown period?
-        // option 3: make this a permissioned function and use input to define the MIN price willing to be accepted.
         // note: slippage here will only ever be upward pressure on the tAsset but you still want to optimise this
+        ISwapRouter.ExactInputSingleParams memory params =
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: address(toke),
+                tokenOut: address(underlying),
+                fee: poolFee,
+                recipient: address(this),
+                deadline: block.timestamp,
+                amountIn: swapAmount,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            });
 
-        // deposit underlying back into toke and take service fee in tAsset
-        // uint256 depositAmount = underlyingAmount - (underlyingAmount / 10); // 90%
-        // uint256 serviceFee = underlyingAmount / 20; // 5%
-        // underlying.safeApprove(address(tokemakPool), depositAmount);
-        // tokemakPool.deposit(depositAmount);
-        // underlying.safeTransfer(feeReciever, serviceFee);
+        // The call to `exactInputSingle` executes the swap.
+        amountOut = swapRouter.exactInputSingle(params);
+
+        // todo: option 3: make this a permissioned function and use input to define the MIN price willing to be accepted.
+
+
+        // deposit all of underlying back into toke and take service fee
+        uint256 underlyingBal = underlying.balanceOf(address(this));
+        uint256 depositAmount = underlyingBal - (underlyingBal / 10); // 90%
+        uint256 serviceFee = underlyingBal / 20; // 5%
+        underlying.safeApprove(address(tokemakPool), depositAmount);
+        tokemakPool.deposit(depositAmount);
+        underlying.safeTransfer(feeReciever, serviceFee);
+
     }
 }

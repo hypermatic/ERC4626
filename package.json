@@ -16,5 +16,8 @@
   },
   "scripts": {
     "lint": "prettier --write src/**/*.sol"
+  },
+  "dependencies": {
+    "@uniswap/v3-periphery": "^1.4.0"
   }
 }
